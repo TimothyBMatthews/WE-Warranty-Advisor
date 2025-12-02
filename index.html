@@ -166,14 +166,22 @@
       </div>
 
       <div class="row">
-        <label class="filebtn" for="xlsxInput"
-          >Please browse for the current file</label
-        >
-        <span id="status" class="status" aria-live="polite"
-          >Waiting for file…</span
-        >
-        <input id="xlsxInput" type="file" accept=".xlsx" />
-      </div>
+  <label class="filebtn" for="xlsxInput">
+    Browse for the current file
+  </label>
+
+  <!-- NEW: button to use the repo copy of MasterLegalData.xlsx -->
+  <button id="defaultBtn" class="btn" type="button">
+    Use GitHub copy
+  </button>
+
+  <span id="status" class="status" aria-live="polite">
+    Waiting for file…
+  </span>
+
+  <input id="xlsxInput" type="file" accept=".xlsx" />
+</div>
+
       <!-- Drag-and-drop target for the Excel file.
      Prevent default dragover/drop to avoid browser navigation. -->
       <div id="drop" class="drop">…or drop the Excel file here</div>
@@ -200,6 +208,9 @@
         var statusEl = document.getElementById("status");
         var input = document.getElementById("xlsxInput");
         var drop = document.getElementById("drop");
+var defaultBtn = document.getElementById("defaultBtn");
+
+
         // Track the active FileReader so we can abort on Exit
         var currentReader = null;
 
@@ -696,6 +707,37 @@ if (wb.Sheets["_States"]) {
 
           r.readAsArrayBuffer(file);
         }
+
+// Load MasterLegalData.xlsx directly from this GitHub Pages site
+function loadDefaultWorkbook() {
+  statusEl.textContent = "Loading default workbook from server…";
+
+  // Relative URL – assumes MasterLegalData.xlsx is in the same folder as index.html
+  fetch("MasterLegalData.xlsx")
+    .then(function (resp) {
+      if (!resp.ok) {
+        throw new Error("HTTP " + resp.status + " loading MasterLegalData.xlsx");
+      }
+      return resp.arrayBuffer();
+    })
+    .then(function (buf) {
+      try {
+        var ctx = buildFromWorkbook(buf, "MasterLegalData.xlsx");
+        saveCtx(ctx);
+        statusEl.textContent = "Loaded default workbook. Opening app…";
+        location.href = "indexv1b.html";
+      } catch (e) {
+        console.error(e);
+        statusEl.textContent = "Failed to parse workbook: " + (e.message || e);
+      }
+    })
+    .catch(function (err) {
+      console.error(err);
+      statusEl.textContent =
+        "Could not load default workbook: " + (err.message || err);
+    });
+}
+
         // ===== EXIT BEHAVIOR =====
         function doExit() {
           // Optional confirm; remove if you want immediate exit
@@ -744,6 +786,30 @@ if (wb.Sheets["_States"]) {
           var f = e.dataTransfer.files && e.dataTransfer.files[0];
           handleFile(f);
         });
+// Wire
+input.addEventListener("change", function () {
+  handleFile(input.files && input.files[0]);
+});
+
+// NEW: "Use GitHub copy" button
+if (defaultBtn) {
+  defaultBtn.addEventListener("click", loadDefaultWorkbook);
+}
+
+drop.addEventListener("dragover", function (e) {
+  e.preventDefault();
+  drop.classList.add("drag");
+});
+// Optional: if there is no cached dataset, auto-load the GitHub copy on first visit
+//try {
+//  var existing = sessionStorage.getItem("we_ctx_json_v1");
+//  if (!existing && defaultBtn) {
+    // Comment out this line if you prefer to require the user to click the button
+    // loadDefaultWorkbook();
+//  }
+//} catch (_) {
+  // ignore sessionStorage errors
+//}
 
         // Exit button + ESC key
         var exitBtn = document.getElementById("exitBtn");
