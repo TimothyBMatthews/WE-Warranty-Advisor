@@ -3864,26 +3864,7 @@ window.closeAdminFaqModal = closeModal;
 
 <!-- Hidden-iframe printing + footer -->
 <script>
-      function printHtmlViaIframe(html) {
-        const iframe = document.createElement("iframe");
-        iframe.style.position = "fixed";
-        iframe.style.width = "0";
-        iframe.style.height = "0";
-        iframe.style.border = "0";
-        document.body.appendChild(iframe);
 
-        const doc = iframe.contentWindow.document;
-        doc.open();
-        doc.write(html);
-        doc.close();
-
-        const finish = () => {
-          iframe.contentWindow.focus();
-          iframe.contentWindow.print();
-          setTimeout(() => iframe.remove(), 300);
-        };
-        setTimeout(finish, 80);
-      }
 // [GLOBAL][UI FOOTER]
 // showFooter():
 //   - Populates bottom-of-page footer text (legal notices, version).
@@ -4523,11 +4504,24 @@ function clearTopicHelpForMode(mode) {
 
             printAllBtn.textContent = "Print All";
             setTip(printAllBtn, "Print all topics for this state");
-            printAllBtn.onclick = () => {
-              const s = currentState();
-              const html = buildStatePrintHTML(s);
-              printHtmlViaIframe(html);
-            };
+ printAllBtn.onclick = () => {
+  const s = currentState();
+  const html = buildStatePrintHTML(s);
+  if (!html) return;
+
+  if (typeof window.printHtmlViaIframe === "function") {
+    window.printHtmlViaIframe(html);
+  } else {
+    // Fallback: open a new window with the print HTML
+    const w = window.open("", "_blank");
+    if (!w) return;
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+    w.focus();
+    w.print();
+  }
+};
           } else {
             // faq-list or faq-item
             printBtn.textContent = "Print / Save FAQ";
@@ -8493,6 +8487,72 @@ if (ctx.EXTRA_SHEETS && typeof ctx.EXTRA_SHEETS === "object") {
         console.warn("Reset ADMIN_UPDATE_NEEDED after export failed", e);
       }
 
+};
+</script>
+<script>
+// -------------------------------------------------------------------
+// printHtmlViaIframe(html)
+// Hidden-iframe print that works in Safari (desktop + iOS) and Chrome,
+// without opening a new tab, and without double-triggering.
+// IMPORTANT: call directly from a user gesture (onclick) to keep Safari happy.
+// -------------------------------------------------------------------
+window.printHtmlViaIframe = function (html) {
+  if (!html || typeof html !== "string") return;
+
+  // Create hidden iframe
+  var iframe = document.createElement("iframe");
+  iframe.setAttribute("aria-hidden", "true");
+  iframe.style.position = "fixed";
+  iframe.style.right = "0";
+  iframe.style.bottom = "0";
+  iframe.style.width = "0";
+  iframe.style.height = "0";
+  iframe.style.border = "0";
+  iframe.style.visibility = "hidden";
+  document.body.appendChild(iframe);
+
+  var win = iframe.contentWindow || iframe;
+  var doc = win.document || iframe.contentDocument;
+
+  // Guard to prevent any accidental second fire
+  var printed = false;
+  function cleanupSoon() {
+    // Defer removal one tick so print dialog can open
+    setTimeout(function () {
+      try { if (iframe && iframe.parentNode) iframe.parentNode.removeChild(iframe); } catch (e) {}
+    }, 0);
+  }
+  function doPrintOnce() {
+    if (printed) return;
+    printed = true;
+    try { win.focus(); } catch (e) {}
+    try { win.print(); } finally { cleanupSoon(); }
+  }
+
+  // In Safari, timers/listeners can lose the user gesture.
+  // Strategy: write the document and call print() immediately, synchronously.
+  try {
+    doc.open();
+    // Minimal wrapper keeps parse fast; your CSS @media print rules apply to the content you pass in.
+    doc.write("<!doctype html><html><head><meta charset='utf-8'>" +
+              "<meta name='viewport' content='width=device-width,initial-scale=1'>" +
+              "<title>Print</title></head><body>" + html + "</body></html>");
+    doc.close();
+  } catch (e) {
+    // As a last resort, print the current page
+    try { window.focus(); window.print(); } catch (e2) {}
+    cleanupSoon();
+    return;
+  }
+
+  // Call print synchronously right after writing — preserves user gesture in Safari.
+  // No setTimeout, no onload needed for Safari reliability.
+  doPrintOnce();
+
+  // Best-effort cleanup if the browser fires afterprint (Safari desktop does, iOS may not).
+  try {
+    win.addEventListener("afterprint", cleanupSoon, { once: true });
+  } catch (e) {}
 };
 </script>
 
