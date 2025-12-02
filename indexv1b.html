@@ -4493,12 +4493,7 @@ function clearTopicHelpForMode(mode) {
             setTip(printBtn, "Print or save this topic as PDF");
             printBtn.onclick = () => {
     const html = buildCardPrintHTML();
-    if (html && typeof printHtmlViaIframe === "function") {
-      printHtmlViaIframe(html);
-    } else {
-      // Fallback to old behavior if something unexpected happens
-      window.print();
-    }
+    printHtml(html);
   };
 
 
@@ -4510,7 +4505,7 @@ function clearTopicHelpForMode(mode) {
   if (!html) return;
 
   if (typeof window.printHtmlViaIframe === "function") {
-    window.printHtmlViaIframe(html);
+    printHtml(html);
   } else {
     // Fallback: open a new window with the print HTML
     const w = window.open("", "_blank");
@@ -4529,7 +4524,7 @@ function clearTopicHelpForMode(mode) {
               printBtn.onclick = () => {
     const html = buildCardPrintHTML();
     if (html && typeof printHtmlViaIframe === "function") {
-      printHtmlViaIframe(html);
+      printHtml(html);
     } else {
       // Fallback to old behavior if something unexpected happens
       window.print();
@@ -6063,21 +6058,8 @@ ${revLine}
 ${faqHtml}
 </body></html>`;
 
-          if (typeof printHtmlViaIframe === "function") {
-            printHtmlViaIframe(html);
-          } else {
-            // Fallback: open a new window to print
-            const w = window.open("", "_blank");
-            if (w) {
-              w.document.write(html);
-              w.document.close();
-              w.focus();
-              w.print();
-              w.close();
-            } else {
-              window.print();
-            }
-          }
+printHtml(html);
+          
         }
         window.printFaqs = printFaqs;
 
@@ -7648,17 +7630,7 @@ function handleFilterChange() {
   <div class="note-body">${bodyHtml}</div>
 </body></html>`;
 
-              if (typeof printHtmlViaIframe === "function") {
-                printHtmlViaIframe(html);
-              } else {
-                const w = window.open("", "_blank");
-                if (!w) return;
-                w.document.open();
-                w.document.write(html);
-                w.document.close();
-                w.focus();
-                w.print();
-              }
+printHtml(html);
             });
           }
 if (notesExportBtn) {
@@ -8487,6 +8459,100 @@ if (ctx.EXTRA_SHEETS && typeof ctx.EXTRA_SHEETS === "object") {
         console.warn("Reset ADMIN_UPDATE_NEEDED after export failed", e);
       }
 
+};
+</script>
+<script>
+// printHtml(html): unified print entry point
+// • iOS/iPadOS Safari: "print portal" in the current page (no iframes, no new tab)
+// • Others (desktop Chrome, desktop Safari, Edge, Firefox): hidden-iframe (your working path)
+// IMPORTANT: call directly from the click/tap handler (avoid async before calling).
+window.printHtml = function (html) {
+  if (!html || typeof html !== "string") return;
+
+  var ua = navigator.userAgent || "";
+  var isIOS = /iPad|iPhone|iPod/.test(ua);
+  var isIPadOS13Plus = /Macintosh/.test(ua) && "ontouchend" in document;
+  var isAppleMobile = isIOS || isIPadOS13Plus;
+
+  // ---------- iOS/iPadOS: print from the main window via a temporary "portal" ----------
+  if (isAppleMobile) {
+    var portalId = "__printPortal", styleId = "__printPortalStyle";
+    try { document.getElementById(portalId)?.remove(); document.getElementById(styleId)?.remove(); } catch (e) {}
+
+    var portal = document.createElement("div");
+    portal.id = portalId;
+    portal.setAttribute("aria-hidden", "true");
+    portal.style.display = "none"; // hidden on screen; shown only in @media print
+    portal.innerHTML = html;
+    document.body.appendChild(portal);
+
+    var css = [
+      "@media print {",
+      "  body > *:not(#" + portalId + ") { display: none !important; }",
+      "  #" + portalId + " { display: block !important; }",
+      "}"
+    ].join("\n");
+    var style = document.createElement("style");
+    style.id = styleId;
+    style.type = "text/css";
+    style.appendChild(document.createTextNode(css));
+    document.head.appendChild(style);
+
+    // Synchronous print keeps iOS in the user-gesture context
+    try { window.focus(); } catch (_) {}
+    try { window.print(); } catch (_) {}
+
+    var cleanup = function () {
+      try { style.remove(); } catch (_) {}
+      try { portal.remove(); } catch (_) {}
+      window.removeEventListener("afterprint", cleanup);
+    };
+    try { window.addEventListener("afterprint", cleanup, { once: true }); } catch (_) {}
+    setTimeout(cleanup, 60000); // iOS sometimes skips 'afterprint'
+    return;
+  }
+
+  // ---------- Desktop & non-iOS browsers: hidden-iframe path ----------
+  var iframe = document.createElement("iframe");
+  iframe.setAttribute("aria-hidden", "true");
+  iframe.style.position = "fixed";
+  iframe.style.right = "0";
+  iframe.style.bottom = "0";
+  iframe.style.width = "0";
+  iframe.style.height = "0";
+  iframe.style.border = "0";
+  iframe.style.visibility = "hidden";
+  document.body.appendChild(iframe);
+
+  var win = iframe.contentWindow || iframe;
+  var doc = win.document || iframe.contentDocument;
+
+  var printed = false;
+  function cleanupSoon() {
+    setTimeout(function () {
+      try { if (iframe && iframe.parentNode) iframe.parentNode.removeChild(iframe); } catch (_) {}
+    }, 0);
+  }
+  function doPrintOnce() {
+    if (printed) return; printed = true;
+    try { win.focus(); } catch (_) {}
+    try { win.print(); } finally { cleanupSoon(); }
+  }
+
+  try {
+    doc.open();
+    doc.write("<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Print</title></head><body>" + html + "</body></html>");
+    doc.close();
+  } catch(_) {
+    try { window.focus(); window.print(); } catch(__) {}
+    cleanupSoon();
+    return;
+  }
+
+  // Synchronous print: reliable for Safari desktop, Chrome etc.
+  doPrintOnce();
+
+  try { win.addEventListener("afterprint", cleanupSoon, { once: true }); } catch(_) {}
 };
 </script>
 <script>
