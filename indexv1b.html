@@ -1137,15 +1137,12 @@ body.notes-open #notesWorkspace {
       }
 
       @media print {
-  /* Hide all the chrome above the card */
-  header,
-  .controls,
-  .actions,
-  .notice,
-  .logo,
-  #notesWorkspace {
-    display: none !important;
-  }
+        .controls,
+        .actions,
+        .notice,
+        .logo {
+          display: none !important;
+        }
         .wrap {
           max-width: 100%;
           margin: 0;
