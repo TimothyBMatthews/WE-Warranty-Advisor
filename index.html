@@ -1,0 +1,788 @@
+<!-- =========================================================
+     FILE: loader.html
+     PURPOSE:
+       Standalone loader that reads MasterLegalData.xlsx with SheetJS,
+       normalizes it to a JSON context, stores it in sessionStorage
+       under key "we_ctx_json_v1", then redirects to indexv1b.html.
+     RUNTIME:
+       Local only (no server). Relies on user-selected .xlsx file.
+     DO NOT:
+       Fetch or render the app UI here; keep this page focused on
+       parsing and context creation.
+========================================================= -->
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Load Warranty Dataset</title>
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" />
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <!-- =========================================================
+     SECTION: Styles (Loader only)
+     Keep visuals minimal and brand-aligned with indexv1b.html.
+     Avoid app styling here. Prefer simple, robust CSS.
+========================================================= -->
+    <style>
+      :root {
+        --border: #dcdfe4;
+        --text: #222;
+        --muted: #666;
+      }
+      body {
+        font:
+          16px/1.55 -apple-system,
+          system-ui,
+          Segoe UI,
+          Roboto,
+          Arial;
+        margin: 0;
+        background: #f2f4f7;
+        color: var(--text);
+        padding-bottom: 48px; /* so fixed footer doesn't overlap content */
+      }
+      .wrap {
+        max-width: 1040px;
+        margin: 40px auto;
+        padding: 24px;
+        background: #fff;
+        background-clip: padding-box;
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.06);
+      }
+      .head {
+        display: flex;
+        gap: 16px;
+        align-items: center;
+        margin-bottom: 16px;
+      }
+      /* Use thetruckpeople-logo.png for WE Program Branding in the Upper Left of the UI - Border Set to Zero*/
+      .logo {
+        width: 301px;
+        height: 104px;
+        border-radius: 1px;
+        background: #fff url("thetruckpeople-logo.png") center/contain no-repeat;
+        border: 0px solid var(--border);
+      }
+      h1 {
+        margin: 0;
+        font-size: 30px;
+      }
+      h2 {
+        margin: 0;
+        font-size: 20px;
+      }
+      .row {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .filebtn {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 14px;
+        border-radius: 8px;
+        border: 1px solid #c8d1e0;
+        background: #f6f8fa;
+        cursor: pointer;
+      }
+      .status {
+        color: var(--muted);
+        margin-left: 6px;
+      }
+      input[type="file"] {
+        position: absolute;
+        left: -9999px;
+        width: 1px;
+        height: 1px;
+        opacity: 0;
+      }
+      .drop {
+        margin-top: 14px;
+        border: 2px dashed var(--border);
+        border-radius: 12px;
+        padding: 18px;
+        text-align: center;
+        color: var(--muted);
+      }
+      .drop.drag {
+        background: #f0f7ff;
+        border-color: #77a9ff;
+        color: #2a64b7;
+      }
+      .hint {
+        margin-top: 15px;
+        font-size: 14px;
+        font-style: italic;
+      }
+      .hint p {
+        margin: 4px 0;
+      }
+      .actions {
+        margin-top: 16px;
+        display: flex;
+        gap: 8px;
+      }
+      .btn {
+        padding: 8px 12px;
+        border: 1px solid #c8d1e0;
+        border-radius: 8px;
+        background: #f6f8fa;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <!-- Header: brand logo (left) and titles (right). Flex-aligned.
+     The right-hand text column may have top/left margins adjusted
+     for visual alignment with the logo. -->
+      <div class="head">
+        <div class="logo" aria-hidden="true"></div>
+        <div style="margin-top: 22px">
+          <div style="margin-left: 26px">
+            <h1 style="text-align: center">
+              Worldwide Equipment Warranty Advisor
+            </h1>
+            <h2 style="text-align: center; color: #c62828">
+              Legal Guidance for Fair Warranty Claims Realization
+            </h2>
+            <div class="hint" style="text-align: center">
+              <!-- File selection controls:
+     - Visible label styled as a button
+     - Hidden <input type="file" id="xlsxInput">
+     - #status live region for progress/errors -->
+              <p>
+                Please select the file <strong>MasterLegalData.xlsx</strong> in
+                the current directory.
+              </p>
+              <p>Only use the current file approved by Worldwide Legal.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="row">
+        <label class="filebtn" for="xlsxInput"
+          >Please browse for the current file</label
+        >
+        <span id="status" class="status" aria-live="polite"
+          >Waiting for file…</span
+        >
+        <input id="xlsxInput" type="file" accept=".xlsx" />
+      </div>
+      <!-- Drag-and-drop target for the Excel file.
+     Prevent default dragover/drop to avoid browser navigation. -->
+      <div id="drop" class="drop">…or drop the Excel file here</div>
+
+      <!-- Exit button lets the user abort/cancel before loading -->
+      <div class="actions">
+        <button id="exitBtn" class="btn" type="button">Exit</button>
+      </div>
+    </div>
+    <script>
+      /* ============================================================
+   SECTION: Loader Logic (IIFE)
+   RESPONSIBILITIES:
+     - Wire input and DnD events
+     - Read workbook with FileReader + SheetJS
+     - Normalize to context (TOPICS, ROWS, ENTRIES, FAQS, etc.)
+     - Persist context to sessionStorage ("we_ctx_json_v1")
+     - Redirect to indexv1b.html
+   NOTES:
+     - Use sessionStorage (tab-scoped) to avoid cross-tab bleed.
+     - Keep UI feedback in #status for accessibility.
+============================================================ */
+      (function () {
+        var statusEl = document.getElementById("status");
+        var input = document.getElementById("xlsxInput");
+        var drop = document.getElementById("drop");
+        // Track the active FileReader so we can abort on Exit
+        var currentReader = null;
+
+        // helpers
+        /* Persist parsed context in this tab only. */ function saveCtx(ctx) {
+          try {
+            sessionStorage.setItem("we_ctx_json_v1", JSON.stringify(ctx));
+          } catch (e) {}
+        }
+        /* Null-safe trim helper (coerce to string first). */
+        function trim(s) {
+          return (s == null ? "" : String(s)).trim();
+        }
+        /* _Topics/_Rows/FAQs → array of objects with defval:'' */
+        function rowsJSON(ws) {
+          return XLSX.utils.sheet_to_json(ws, { defval: "" });
+        }
+        /* State sheet → A1 arrays; first row = TopicIDs */
+        function rowsA1(ws) {
+          return XLSX.utils.sheet_to_json(ws, { defval: "", header: 1 });
+        }
+        /* Split list field by priority: "||" > "|" > ";" */
+        function splitSmart(v) {
+          v = (v || "") + "";
+          if (!v) return [];
+          if (v.indexOf("||") > -1)
+            return v
+              .split("||")
+              .map(function (s) {
+                return s.trim();
+              })
+              .filter(Boolean);
+          if (v.indexOf("|") > -1)
+            return v
+              .split("|")
+              .map(function (s) {
+                return s.trim();
+              })
+              .filter(Boolean);
+          if (v.indexOf(";") > -1)
+            return v
+              .split(";")
+              .map(function (s) {
+                return s.trim();
+              })
+              .filter(Boolean);
+          v = v.trim();
+          return v ? [v] : [];
+        }
+
+        /* CORE: Parse workbook → normalized context
+   - Validates presence of required sheets
+   - Builds Topic/Row definitions (IDs + labels + sort)
+   - Reads each state sheet as (RowID × TopicID) matrix
+   - Generates ENTRIES/FAQS consumed by indexv1b.html */
+
+        function buildFromWorkbook(buf, name) {
+          var wb = XLSX.read(buf, { type: "array" });
+          if (!wb.Sheets["_Topics"]) throw new Error("Missing sheet _Topics");
+          if (!wb.Sheets["_Rows"]) throw new Error("Missing sheet _Rows");
+
+         // ---- NEW: _Meta (optional) ----
+         var META = {};
+         if (wb.Sheets["_Meta"]) {
+           var _metaRows = XLSX.utils.sheet_to_json(wb.Sheets["_Meta"], {
+             defval: "",
+           });
+           if (_metaRows && _metaRows.length) {
+             var r0 = _metaRows[0];
+             META = {
+               version: (r0.Version || "").toString().trim(),
+               releaseDate: (r0.ReleaseDate || "").toString().trim(),
+               revisionDate: (r0.RevisionDate || "").toString().trim(),
+               notes: (r0.Notes || "").toString().trim(),
+               copyright: (r0.Copyright || "").toString().trim(),
+               adminPassword: (r0.AdminPW || "").toString().trim(), // <-- NEW
+             };
+           }
+         }
+
+// ---- _States (optional; if present, it is source of truth) ----
+var STATE_NAMES = {
+  KY: "Kentucky",
+  OH: "Ohio",
+  WV: "West Virginia",
+  VA: "Virginia",
+  SC: "South Carolina",
+  GA: "Georgia",
+  TN: "Tennessee",
+};
+var STATES_LIST = undefined;   // enabled states for UI
+var STATES_ALL  = undefined;   // all states (enabled + disabled)
+var stateSheets = [];          // list of codes we will iterate for parsing
+var EXTRA_SHEETS = {}; // will hold passthrough data for non-core sheets
+
+if (wb.Sheets["_States"]) {
+  var _stateRows = XLSX.utils.sheet_to_json(wb.Sheets["_States"], {
+    defval: "",
+  });
+
+  // Normalize ALL rows first
+  var allStates = _stateRows
+    .map(function (r) {
+      var code = (r["Abbreviation"] || "")
+        .toString()
+        .trim()
+        .toUpperCase();
+      var name = (r["State"] || "").toString().trim();
+      var flag = (r["Enabled"] || "").toString().trim().toLowerCase();
+      var yes =
+        flag === "yes" ||
+        flag === "y" ||
+        flag === "true" ||
+        flag === "1";
+      var order = Number(r["Order"] || r.Sort || r.SortOrder || 9999);
+      var implementedAt = (r["Implementation Date"] || "")
+        .toString()
+        .trim();
+      var revisionDate = (r["Revision Date"] || "").toString().trim();
+      return {
+        code: code,
+        name: name,
+        enabled: yes,
+        order: order,
+        implementedAt: implementedAt,
+        revisionDate: revisionDate,
+      };
+    })
+    .filter(function (s) {
+      // keep all rows that have a code + name, regardless of enabled
+      return s.code && s.name;
+    });
+
+  // Enabled subset (for dropdowns, etc.)
+  var enabled = allStates
+    .filter(function (s) {
+      return s.enabled;
+    })
+    .sort(function (a, b) {
+      return a.order - b.order || a.name.localeCompare(b.name);
+    });
+
+  // Save lists
+  STATES_ALL = allStates;
+  STATES_LIST = enabled;
+
+  // Names + revision for ENABLED states (existing behavior)
+  STATE_NAMES = {};
+  enabled.forEach(function (s) {
+    STATE_NAMES[s.code] = s.name;
+  });
+
+  var STATE_REVISION = {};
+  enabled.forEach(function (s) {
+    if (s.revisionDate) STATE_REVISION[s.code] = s.revisionDate;
+  });
+
+
+            stateSheets = enabled.map(function (s) {
+              return s.code;
+            }); // do NOT filter to existing tabs
+          } else {
+            // Fallback: derive codes from any non-underscore, non-FAQs sheet tabs
+            var allTabs = wb.SheetNames.filter(function (n) {
+              return n.charAt(0) !== "_" && n.toLowerCase() !== "faqs";
+            });
+            stateSheets = allTabs.slice();
+          }
+
+          // Read _Topics once, build tooltip maps, then build TOPICS list
+          var _topicsRaw = rowsJSON(wb.Sheets["_Topics"]) || [];
+          var TOPIC_TIPS_BY_ID = {};
+          var TOPIC_TIPS = {};
+
+          _topicsRaw.forEach(function (r) {
+            var id = trim(r["TopicID"]);
+            var label = trim(r["UI Label"] || id);
+            // be tolerant of header variants
+            var tip = trim(r["Tooltip"] || r["Tool Tip"] || r["Tip"]);
+            if (tip) {
+              if (id) TOPIC_TIPS_BY_ID[id] = tip;
+              if (label) TOPIC_TIPS[label] = tip;
+            }
+          });
+
+          var TOPICS = _topicsRaw
+            .map(function (r) {
+              return {
+                id: trim(r["TopicID"]),
+                label: trim(r["UI Label"]),
+                key: trim(r["Key"] || ""),
+                order: Number(r["SortOrder"] || 0),
+              };
+            })
+            .filter(function (r) {
+              return r.id;
+            })
+            .sort(function (a, b) {
+              return a.order - b.order;
+            });
+
+          // Canonicalize _Rows into stable keys so indexv1b.html can be simple
+          var _rowsRaw = rowsJSON(wb.Sheets["_Rows"]);
+
+          function keyCI(obj, wanted) {
+            // find the actual key name on obj that equals wanted (ignore case/spaces)
+            var want = String(wanted).replace(/\s+/g, "").toLowerCase();
+            for (var k in obj) {
+              if (!Object.prototype.hasOwnProperty.call(obj, k)) continue;
+              var norm = String(k).replace(/\s+/g, "").toLowerCase();
+              if (norm === want) return k;
+            }
+            return undefined;
+          }
+          function yesish(v) {
+            if (v === true || v === 1) return true;
+            var s = String(v ?? "")
+              .trim()
+              .toLowerCase();
+            return s === "yes" || s === "y" || s === "true" || s === "1";
+          }
+          function numOr(v, dflt) {
+            var n = Number(v);
+            return Number.isFinite(n) ? n : dflt;
+          }
+
+          var ROWS = (_rowsRaw || [])
+            .map(function (r) {
+              var kId = keyCI(r, "RowID") || "id";
+              var kLbl = keyCI(r, "UI Label") || keyCI(r, "UILabel") || "label";
+              var kTyp = keyCI(r, "Type") || "type";
+              var kOrd = keyCI(r, "Order") || "order";
+              var kRIB =
+                keyCI(r, "RenderinBody") ||
+                keyCI(r, "Render In Body") ||
+                keyCI(r, "RenderInBody") ||
+                "renderInBody";
+              var kPD =
+                keyCI(r, "Preferred Delimiter") ||
+                keyCI(r, "Preferred Delimite") ||
+                "preferredDelimiter";
+              var kHdr = keyCI(r, "HeaderFor") || "headerFor";
+
+              var id = trim(r[kId]);
+              if (!id) return null;
+
+              var lbl = trim(r[kLbl] || id);
+              var typ = trim(r[kTyp] || "text");
+              var ord = numOr(r[kOrd], 999999);
+
+              // Default policy: visible unless explicitly No/False/0
+              var ribCellExists =
+                kRIB in r || "renderInBody" in r || "RenderinBody" in r;
+              var ribFromCell = yesish(
+                kRIB in r ? r[kRIB] : (r.renderInBody ?? r.RenderinBody),
+              );
+              var renderInBody = ribCellExists ? ribFromCell : true;
+
+              return {
+                id: id,
+                label: lbl,
+                type: typ,
+                order: ord,
+                renderInBody: renderInBody,
+                preferredDelimiter: String(r[kPD] ?? ""),
+                headerFor: String(r[kHdr] ?? ""),
+              };
+            })
+            .filter(Boolean);
+          var ENTRIES = [];
+
+          stateSheets.forEach(function (code) {
+            var sh = wb.Sheets[code];
+            if (!sh) {
+              // Enabled but no worksheet yet; skip
+              return;
+            }
+
+            var a1 = rowsA1(sh);
+            if (!a1.length) return;
+
+            var headers = a1[0].map(function (h) {
+              return trim(h);
+            });
+            var data = a1.slice(1);
+            var topicIDs = headers.slice(1).filter(Boolean);
+
+            var grid = {};
+            data.forEach(function (r) {
+              var rid = trim(r[0]);
+              if (!rid) return;
+              grid[rid] = grid[rid] || {};
+              for (var c = 1; c < headers.length; c++) {
+                var tid = headers[c];
+                if (tid) grid[rid][tid] = trim(r[c]);
+              }
+            });
+
+            topicIDs.forEach(function (tid) {
+              var cells = {};
+              ROWS.forEach(function (row) {
+                cells[row.id] = (grid[row.id] && grid[row.id][tid]) || "";
+              });
+              function r(id) {
+                return cells[id] || "";
+              }
+
+              var adminChecklist = splitSmart(r("Row2"));
+              var a = splitSmart(r("Row3a"));
+              var b = splitSmart(r("Row3b"));
+              var pushbacks = [];
+              var max = Math.max(a.length, b.length);
+              for (var i = 0; i < max; i++)
+                pushbacks.push({ oem: a[i] || "", response: b[i] || "" });
+              var citations = splitSmart(r("Row4"));
+
+              // collect any additional rows dynamically
+              var SPECIAL = new Set([
+                "Row1",
+                "Row2",
+                "Row3a",
+                "Row3b",
+                "Row4",
+                "Row6",
+              ]);
+              // collect rows based on _Rows (include non-render rows so data is preserved)
+             var excerpts = ROWS
+               .map(function (row) {
+                 return {
+                   id: row.id,
+                   label: row.label || row.id,
+                   type: row.type || "text",
+                   order: Number(row.order || 0),
+                   value: r(row.id),
+              // we can keep renderInBody on each excerpt if useful later
+                   renderInBody: !!row.renderInBody,
+                 };
+               })
+                .filter(function (x) {
+                  return x.value && String(x.value).trim() !== "";
+                })
+                .sort(function (a, b) {
+                  return (
+                    a.order - b.order ||
+                    String(a.label || "").localeCompare(String(b.label || ""))
+                  );
+                });
+
+              ENTRIES.push({
+                state: code.toUpperCase(),
+                topic: tid,
+                updatedAt: r("Row6") || "",
+                summary: r("Row1") || "",
+                adminChecklist: adminChecklist,
+                pushbacks: pushbacks,
+                citations: citations,
+                excerpts: excerpts,
+              });
+            });
+          });
+
+          // ---- FAQs (optional) ----
+          var FAQS = [];
+          if (wb.Sheets["FAQs"]) {
+            var faqRows = rowsJSON(wb.Sheets["FAQs"]);
+            FAQS = faqRows
+              .map(function (r) {
+                return {
+                  state: trim(r["State"] || ""),
+                  id: trim(r["ID"] || ""),
+                  question: trim(r["Question"] || ""),
+                  answer: trim(r["Answer"] || ""),
+                  authority: trim(r["Legal Authority"] || ""),
+                  citation: trim(r["Citation"] || ""),
+                  sort: Number(r["Sort"] || 0),
+                  categories: [r["Category1"], r["Category2"], r["Category3"]]
+                    .filter(Boolean)
+                    .map(String),
+                };
+              })
+              .sort(function (a, b) {
+                return a.sort - b.sort;
+              });
+          }
+          // ===========================================================
+          // PASS-THROUGH EXTRA SHEETS (Preserve future or experimental data)
+          // ===========================================================
+          (function () {
+            if (!wb || !Array.isArray(wb.SheetNames)) return;
+
+            var CORE = new Set(["_Meta", "_Topics", "_Rows", "_States", "FAQs"]);
+
+            // Known state sheets (codes from stateSheets)
+            var stateSet = new Set(
+              Array.isArray(stateSheets)
+                ? stateSheets.map(function (s) {
+                    return String(s || "").toUpperCase();
+                  })
+                : [],
+            );
+
+            wb.SheetNames.forEach(function (sn) {
+              // Skip core sheets
+              if (CORE.has(sn)) return;
+
+              // Skip recognized state sheets (KY, WV, etc.)
+              if (stateSet.has(String(sn).toUpperCase())) return;
+
+              var ws = wb.Sheets[sn];
+              if (!ws) return;
+
+              try {
+                var arr = XLSX.utils.sheet_to_json(ws, {
+      defval: "",
+      raw: false   // <-- NEW: use formatted cell values (e.g., "1/1/25")
+    });
+                if (Array.isArray(arr) && arr.length) {
+                  EXTRA_SHEETS[sn] = arr;
+                }
+              } catch (e) {
+                console.warn("Could not preserve sheet:", sn, e);
+              }
+            });
+          })();
+
+
+          // ---- Build + save context ----
+            var ctx = {
+            file: { name: name },
+            stateSheets: stateSheets,
+            EXTRA_SHEETS: EXTRA_SHEETS,
+            META: META,
+            STATES: STATES_LIST,
+            STATES_ALL: STATES_ALL,
+            STATE_NAMES: STATE_NAMES,
+            STATE_REVISION: STATE_REVISION,
+            TOPIC_DEFS: TOPICS.map(function (t) {
+              return [t.id, t.label];
+            }),
+            ROWS: ROWS,
+            ENTRIES: ENTRIES,
+            FAQS: FAQS,
+            TOPIC_TIPS_BY_ID: TOPIC_TIPS_BY_ID,
+            TOPIC_TIPS: TOPIC_TIPS,
+          };
+
+
+          saveCtx(ctx);
+          return ctx;
+        }
+        /* IO pipeline:
+   - Accepts a user-selected .xlsx
+   - Streams via FileReader
+   - Parses → saveCtx → navigate to indexv1b.html
+   - Reports errors in #status */
+
+        function handleFile(file) {
+          if (!file) {
+            statusEl.textContent = "No file selected.";
+            return;
+          }
+          statusEl.textContent = "Reading workbook…";
+
+          // Create a reader and keep a reference so we can abort on Exit
+          var r = new FileReader();
+          currentReader = r;
+
+          r.onload = function () {
+            try {
+              var ctx = buildFromWorkbook(
+                r.result,
+                file.name || "MasterLegalData.xlsx",
+              );
+              saveCtx(ctx);
+              statusEl.textContent = "Loaded. Opening app…";
+              // redirect to the app (indexv1b.html in same folder)
+              location.href = "indexv1b.html";
+            } catch (e) {
+              console.error(e);
+              statusEl.textContent = "Failed: " + (e.message || e);
+              currentReader = null; // finished (failed)
+            }
+          };
+
+          // Handle read errors and aborts cleanly
+          r.onerror = function () {
+            statusEl.textContent = "Read cancelled or failed.";
+            currentReader = null;
+          };
+          r.onabort = function () {
+            statusEl.textContent = "Load aborted.";
+            currentReader = null;
+          };
+
+          r.readAsArrayBuffer(file);
+        }
+        // ===== EXIT BEHAVIOR =====
+        function doExit() {
+          // Optional confirm; remove if you want immediate exit
+          var ok = confirm("Cancel and exit the loader?");
+          if (!ok) return;
+
+          // Abort any in-flight read
+          if (currentReader && typeof currentReader.abort === "function") {
+            try {
+              currentReader.abort();
+            } catch (_) {}
+            currentReader = null;
+          }
+
+          // Clear dataset for this tab so the app won’t open with stale data
+          try {
+            sessionStorage.removeItem("we_ctx_json_v1");
+          } catch (_) {}
+
+          // Exit strategy: go to a blank page (reliable locally)
+          location.href = "about:blank";
+
+          // Alternatives:
+          // if (history.length > 1) { history.back(); } else { location.href = 'about:blank'; }
+          // window.close(); // usually blocked unless script-opened
+        }
+
+        /* Wire up input and DnD:
+   - Prevent default navigation during drag/drop
+   - Remove/add "drag" class for visual feedback
+   - Call handleFile(...) on input change or drop */
+        // Wire
+        input.addEventListener("change", function () {
+          handleFile(input.files && input.files[0]);
+        });
+        drop.addEventListener("dragover", function (e) {
+          e.preventDefault();
+          drop.classList.add("drag");
+        });
+        drop.addEventListener("dragleave", function (e) {
+          drop.classList.remove("drag");
+        });
+        drop.addEventListener("drop", function (e) {
+          e.preventDefault();
+          drop.classList.remove("drag");
+          var f = e.dataTransfer.files && e.dataTransfer.files[0];
+          handleFile(f);
+        });
+
+        // Exit button + ESC key
+        var exitBtn = document.getElementById("exitBtn");
+        if (exitBtn) exitBtn.addEventListener("click", doExit);
+        window.addEventListener("keydown", function (e) {
+          if ((e.key || "").toLowerCase() === "escape") doExit();
+        });
+        // Optional legacy dev buttons (safeguarded)
+        var _clearBtn = document.getElementById("clear");
+        if (_clearBtn)
+          _clearBtn.onclick = function () {
+            sessionStorage.removeItem("we_ctx_json_v1");
+            alert("Cached dataset cleared for this tab.");
+          };
+        var _gotoBtn = document.getElementById("goto");
+        if (_gotoBtn)
+          _gotoBtn.onclick = function () {
+            location.href = "indexv1b.html";
+          };
+      })();
+    </script>
+    <footer
+      id="we-footer"
+      style="
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        text-align: center;
+        background: #fff;
+        border-top: 1px solid #ddd;
+        padding: 12px 8px;
+        font-size: 14px;
+        color: #666;
+        z-index: 2147483647;
+      "
+    >
+      ©2025 Worldwide Equipment, Inc. For internal use only. All rights
+      reserved.
+    </footer>
+  </body>
+</html>
