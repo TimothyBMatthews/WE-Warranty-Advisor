@@ -307,6 +307,14 @@ Warranty Reimbursement: State Law Requirements -- Interactive Program
         border-color: var(--pill-bg-active) !important;
       }
 
+
+/* When Notes mode is active */
+body.notes-open #notesWorkspace {
+  border: 1px solid #bc3737;   /* Worldwide red */
+  border-top-width: 2px;
+//  box-shadow: 0 0 6px rgba(188,55,55,0.25);  /* soft glow */
+}
+
       /* --- Two-column Topic Grid (FAQs) --- */
       .faq-topic-grid {
         display: grid;
@@ -710,10 +718,11 @@ Warranty Reimbursement: State Law Requirements -- Interactive Program
       }
         .notes-workspace {
     background: var(--card);
-    border: 1px solid #e6e6e6;
+    border: 2px solid #e6e6e6;
     border-radius: 12px;
     padding: 0;
     margin: 16px 0;
+    overflow: hidden;            /* Clip inner corners to match radius */
   }
 
   /* Top header strip for User Notes */
@@ -732,9 +741,10 @@ Warranty Reimbursement: State Law Requirements -- Interactive Program
    --------------------------------------------------------- */
 
   .notes-ribbon-accent {
-    height: 3px;
+    height: 2px;
     background: var(--brand-red);
     border-radius: 12px 12px 0 0;
+    margin: 0; 
   }
 
   .notes-ribbon-main {
@@ -744,6 +754,7 @@ Warranty Reimbursement: State Law Requirements -- Interactive Program
     gap: 12px;
     padding: 3px 6px;
     background: #fdf7f7;
+    border-top: none;
     flex-wrap: wrap;
   }
 
@@ -1126,12 +1137,15 @@ Warranty Reimbursement: State Law Requirements -- Interactive Program
       }
 
       @media print {
-        .controls,
-        .actions,
-        .notice,
-        .logo {
-          display: none !important;
-        }
+  /* Hide all the chrome above the card */
+  header,
+  .controls,
+  .actions,
+  .notice,
+  .logo,
+  #notesWorkspace {
+    display: none !important;
+  }
         .wrap {
           max-width: 100%;
           margin: 0;
@@ -5581,8 +5595,7 @@ card.addEventListener("click", function (evt) {
       break-before: page;
     }
   }
-
-    
+ 
 
 </style></head>
 <body>
@@ -7176,7 +7189,51 @@ ${faqHtml}
             btn.appendChild(meta);
             container.appendChild(btn);
           });
+          return list;
         }
+// Returns the notes that match the current filters (state, OEM, tag)
+function getFilteredNotes(stateFilterSel, manufFilterSel, tagFilterSel) {
+  const stateFilter = stateFilterSel ? stateFilterSel.value : "";
+  const manufFilter = manufFilterSel ? manufFilterSel.value : "";
+  const tagFilterVal = tagFilterSel ? tagFilterSel.value : "";
+
+  // Start with all notes, newest first
+  let list = notes.slice().sort(function (a, b) {
+    const aTime = a && a.createdAt ? Date.parse(a.createdAt) || 0 : 0;
+    const bTime = b && b.createdAt ? Date.parse(b.createdAt) || 0 : 0;
+    return bTime - aTime;
+  });
+
+  if (stateFilter) {
+    list = list.filter((n) => (n.state || "") === stateFilter);
+  }
+  if (manufFilter) {
+    list = list.filter((n) => {
+      const arr =
+        n.tags && Array.isArray(n.tags.manufacturers)
+          ? n.tags.manufacturers
+          : [];
+      return arr.includes(manufFilter);
+    });
+  }
+  if (tagFilterVal) {
+    if (tagFilterVal === "__none__") {
+      list = list.filter((n) => {
+        const arr =
+          n.tags && Array.isArray(n.tags.other) ? n.tags.other : [];
+        return !arr.length;
+      });
+    } else {
+      list = list.filter((n) => {
+        const arr =
+          n.tags && Array.isArray(n.tags.other) ? n.tags.other : [];
+        return arr.includes(tagFilterVal);
+      });
+    }
+  }
+
+  return list;
+}
 
         // [EDITOR][LOCAL]
         // applyFormat(cmd, value):
@@ -7292,7 +7349,62 @@ ${faqHtml}
               }
             });
           }
+function handleFilterChange() {
+  // First, compute which notes *should* be visible
+  const filtered = getFilteredNotes(
+    notesStateFilter,
+    notesManufacturerFilter,
+    notesTagFilter,
+  );
 
+  // Then re-render the list UI based on current filters
+  renderNotesList(
+    notesList,
+    notesStateFilter,
+    notesManufacturerFilter,
+    notesTagFilter,
+  );
+
+  // If the current note is still in the filtered set, we're done
+  if (
+    currentNoteId &&
+    filtered.some((n) => String(n.id) === String(currentNoteId))
+  ) {
+    return;
+  }
+
+  // If there are matching notes, switch to the first one
+  if (filtered.length > 0) {
+    const next = filtered[0];
+    currentNoteId = next.id;
+    syncEditorToNote(
+      next,
+      noteTitleInput,
+      noteBody,
+      noteStateTag,
+      noteManufacturerTag,
+      noteOtherTagsInput,
+    );
+
+    // Ensure active highlight matches the new current note
+    renderNotesList(
+      notesList,
+      notesStateFilter,
+      notesManufacturerFilter,
+      notesTagFilter,
+    );
+    return;
+  }
+
+  // *** IMPORTANT CASE ***
+  // No notes match the filters → clear the editor entirely
+  currentNoteId = null;
+  if (noteTitleInput) noteTitleInput.value = "";
+  if (noteBody) noteBody.innerHTML = "";
+  if (noteStateTag) noteStateTag.value = "";
+  if (noteManufacturerTag) noteManufacturerTag.value = "";
+  if (noteOtherTagsInput) noteOtherTagsInput.value = "";
+}
           // [UI STATE][LOCAL]
           // updatePrintLabelForNotes(open):
           // In User Notes mode we disable the right-side action buttons
@@ -7741,36 +7853,15 @@ if (notesImportBtn) {
             });
           }
 
-          if (notesStateFilter) {
-            notesStateFilter.addEventListener("change", function () {
-              renderNotesList(
-                notesList,
-                notesStateFilter,
-                notesManufacturerFilter,
-                notesTagFilter,
-              );
-            });
-          }
-          if (notesManufacturerFilter) {
-            notesManufacturerFilter.addEventListener("change", function () {
-              renderNotesList(
-                notesList,
-                notesStateFilter,
-                notesManufacturerFilter,
-                notesTagFilter,
-              );
-            });
-          }
-          if (notesTagFilter) {
-            notesTagFilter.addEventListener("change", function () {
-              renderNotesList(
-                notesList,
-                notesStateFilter,
-                notesManufacturerFilter,
-                notesTagFilter,
-              );
-            });
-          }
+if (notesStateFilter) {
+  notesStateFilter.addEventListener("change", handleFilterChange);
+}
+if (notesManufacturerFilter) {
+  notesManufacturerFilter.addEventListener("change", handleFilterChange);
+}
+if (notesTagFilter) {
+  notesTagFilter.addEventListener("change", handleFilterChange);
+}
 
           // [EVENTS][LOCAL]
           // Formatting toolbar:
